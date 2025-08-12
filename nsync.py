@@ -20,7 +20,7 @@ def stack_mat(mat_list: list) -> list[Any] | ndarray[tuple[Any, ...], Any]:
 
     return eventlog if eventlog is not None else stacked_mat_files
 
-def stack_npy(npy_list) -> np.ndarray:
+def stack_npy(npy_list: list) -> np.ndarray:
     signals = []
     if isinstance(npy_list, list) and len(npy_list) > 0:
         for npy_file in npy_list:
@@ -40,15 +40,36 @@ def stack_npy(npy_list) -> np.ndarray:
 
     return stacked_npy if stacked_npy.ndim == 2 else None
 
+def stack_windows(windows: np.ndarray) -> np.ndarray:
+    if windows.ndim != 3:
+        raise ValueError("Windows must be a 3D array.")
+
+    return windows.reshape(-1, windows.shape[-1])
+
+def normalize_windows(windows: np.ndarray, baseline: int = 3, sampling_rate: int = 4) -> np.ndarray:
+    baseline_range = np.arange(baseline * sampling_rate)
+
+    normalized_windows = []
+    for window in windows:
+        baseline_window = window[:, baseline_range]
+        baseline_mean = np.mean(baseline_window, axis=1)
+        baseline_std = np.std(baseline_window, axis=1)
+        normalized_window = (window - baseline_mean[:, None]) / baseline_std[:, None]
+        normalized_windows.append(normalized_window)
+
+    normalized_windows = np.array(normalized_windows)
+
+    return normalized_windows
+
 class NSyncDataset:
     def __init__(self, events_data: list, signals_data: list, frame_rate: int = 30,
-                 frames_averaged: int = 4, window_size: int = 10, eventlog_dict: dict | None = None,) -> None:
+                 frames_averaged: int = 4, window_size: int = 21, eventlog_dict: dict | None = None,) -> None:
         self.frame_rate = frame_rate
         self.frames_averaged = frames_averaged
         self.sampling_rate = frame_rate / frames_averaged
         self.time_per_frame = 1 / frame_rate
         self.window_size = window_size
-        self.window_frames = int(window_size * self.sampling_rate)
+        self.window_frames = int(self.window_size * self.sampling_rate)
         self.eventlog_dict = {
             # FIXME: this dictionary is compatible with the MATLAB GUI-acquired data only
             "active_lever": 22,
@@ -84,23 +105,92 @@ class NSyncDataset:
         aligned_events = np.array([event_ids, event_timestamps, adjusted_timestamps, frame_indices]).T[adjusted_timestamps <= max_time]
         return aligned_events
 
-    def extract_unique_events(self, event_type: str = "cue", filter_event: str = "active_lever_timeout", sep: int = 1000) -> np.ndarray:
-        filtered_eventlog = self.eventlog_df[self.eventlog_df[:, 0] == self.eventlog_dict[event_type]]
-        for idx, row in enumerate(filtered_eventlog):
-            print(row)
+    def extract_unique_events(self, target_event: str = "active_lever", filter_event: str = "active_lever_timeout", sep: float = 1000.0) -> np.ndarray:
+        target_events = self.eventlog_df[self.eventlog_df[:, 0] == self.eventlog_dict[target_event]]
+        filter_events = self.eventlog_df[self.eventlog_df[:, 0] == self.eventlog_dict[filter_event]]
 
-        return filtered_eventlog
+        if len(target_events) < 2:
+            print("Insufficient target events found.")
+            return np.array([])
 
-    def extract_normalized_windows(self, event_type="active_lever_timeout") -> np.ndarray:
-        event_timestamps = self.eventlog_df[self.eventlog_df[:, 0] == self.eventlog_dict[event_type]][:, 1]
+        if len(filter_events) == 0:
+            return target_events
 
-        pre_origin_window = int(10 * self.sampling_rate)
-        event_window_size = int((pre_origin_window * 2) + (1.6 * self.sampling_rate))
-        post_origin_window = event_window_size - pre_origin_window
-        baseline = (0, (3 * self.sampling_rate))
+        combined_events = np.sort(np.vstack((target_events, filter_events)), axis=0)
 
-        return event_timestamps
+        valid_target_events = []
 
+        for event in combined_events:
+            if event[0] == self.eventlog_dict[target_event]:
+                target_ts = event[1]
+                filtered_ts = filter_events[:, 1]
+                if not np.any(np.abs(filtered_ts - target_ts) <= sep):
+                    valid_target_events.append(event)
+
+        valid_target_events = np.array(valid_target_events) if len(valid_target_events) > 0 else np.array([])
+
+        return valid_target_events
+
+    # def extract_normalized_windows(self, target_event: str = "active_lever") -> np.ndarray:
+    #     if self.eventlog_df.shape[1] == 4:
+    #         target_events = self.eventlog_df[self.eventlog_df[:, 0] == self.eventlog_dict[target_event]][:, 3]
+    #         frame_indices = np.floor(target_events).astype(int)
+    #
+    #         stacked_windows = []
+    #         for origin in frame_indices:
+    #             empty_window = np.zeros((self.num_neurons, self.window_frames + 1))
+    #             start_idx = np.floor(origin - (self.window_frames / 2)).astype(int)
+    #             end_idx = np.ceil(origin + (self.window_frames / 2)).astype(int)
+    #
+    #             if start_idx < 0:
+    #                 empty_window[:, 0:end_idx] = self.extracted_signals[:, 0:end_idx]
+    #             elif end_idx > self.num_frames:
+    #                 empty_window[:, start_idx:] = self.extracted_signals[:, start_idx:self.num_frames]
+    #             else:
+    #                 empty_window = self.extracted_signals[:, start_idx:end_idx]
+    #
+    #             event_window = empty_window
+    #             stacked_windows.append(event_window)
+    #
+    #         stacked_windows = np.array(stacked_windows)
+    #
+    #         return stacked_windows
+    #
+    #     else:
+    #         return np.array([])
+
+    def extract_normalized_windows(self, target_event: str = "active_lever") -> np.ndarray:
+        if self.eventlog_df.shape[1] != 4:
+            return np.array([])
+
+        frame_indices = np.floor(
+            self.eventlog_df[self.eventlog_df[:, 0] == self.eventlog_dict[target_event]][:, 3]
+        ).astype(int)
+
+        W = self.window_frames + 1
+        half = W // 2
+
+        stacked = []
+        for origin in frame_indices:
+            # Global start/end in the signal
+            start = origin - half
+            end = start + W
+
+            # Clip to valid signal range
+            sig_start = max(start, 0)
+            sig_end = min(end, self.num_frames)
+
+            # Local window indices
+            win_start = sig_start - start  # ≥ 0
+            win_end = win_start + (sig_end - sig_start)
+
+            # Allocate zero‐window and copy overlap
+            win = np.zeros((self.num_neurons, W))
+            win[:, win_start:win_end] = self.extracted_signals[:, sig_start:sig_end]
+
+            stacked.append(win)
+
+        return np.array(stacked)
 
 
     def mean_neural_activity(self):

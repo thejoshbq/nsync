@@ -24,16 +24,20 @@ def stack_npy(npy_list: list) -> np.ndarray:
     signals = []
     if isinstance(npy_list, list) and len(npy_list) > 0:
         for npy_file in npy_list:
-            with warnings.catch_warnings(record=True) as w:
+            with warnings.catch_warnings(record=True) as captured_warnings:
                 warnings.simplefilter("always")
+
                 try:
                     loaded_npy = np.load(npy_file).squeeze()
                     signals.append(loaded_npy)
                 except Exception as e:
                     print(f"Error loading {npy_file}: {e}")
                     continue
-                for warn in w:
-                    print(f"Warning for {npy_file}: {warn.message}")
+
+                for warning in captured_warnings:
+                    if "Python 2" in warning.message:
+                        np.save(npy_file, loaded_npy)
+
         stacked_npy = np.hstack(signals)
     else:
         stacked_npy = np.array(npy_list)
@@ -46,20 +50,31 @@ def stack_windows(windows: np.ndarray) -> np.ndarray:
 
     return windows.reshape(-1, windows.shape[-1])
 
+
 def normalize_windows(windows: np.ndarray, baseline: int = 3, sampling_rate: int = 4) -> np.ndarray:
     baseline_range = np.arange(baseline * sampling_rate)
+    eps = np.finfo(float).eps  # Small constant to prevent division by zero
 
     normalized_windows = []
     for window in windows:
         baseline_window = window[:, baseline_range]
         baseline_mean = np.mean(baseline_window, axis=1)
         baseline_std = np.std(baseline_window, axis=1)
+
+        # Replace zero standard deviations with a small constant
+        baseline_std = np.where(baseline_std == 0, eps, baseline_std)
+
+        # Normalize the window
         normalized_window = (window - baseline_mean[:, None]) / baseline_std[:, None]
+
+        # Replace any remaining invalid values (inf, nan) with zeros
+        normalized_window = np.nan_to_num(normalized_window, nan=0.0, posinf=0.0, neginf=0.0)
+
         normalized_windows.append(normalized_window)
 
     normalized_windows = np.array(normalized_windows)
-
     return normalized_windows
+
 
 class NSyncDataset:
     def __init__(self, events_data: list, signals_data: list, frame_rate: int = 30,
@@ -109,7 +124,7 @@ class NSyncDataset:
         target_events = self.eventlog_df[self.eventlog_df[:, 0] == self.eventlog_dict[target_event]]
         filter_events = self.eventlog_df[self.eventlog_df[:, 0] == self.eventlog_dict[filter_event]]
 
-        if len(target_events) < 2:
+        if len(target_events) < 1:
             print("Insufficient target events found.")
             return np.array([])
 
@@ -130,34 +145,6 @@ class NSyncDataset:
         valid_target_events = np.array(valid_target_events) if len(valid_target_events) > 0 else np.array([])
 
         return valid_target_events
-
-    # def extract_normalized_windows(self, target_event: str = "active_lever") -> np.ndarray:
-    #     if self.eventlog_df.shape[1] == 4:
-    #         target_events = self.eventlog_df[self.eventlog_df[:, 0] == self.eventlog_dict[target_event]][:, 3]
-    #         frame_indices = np.floor(target_events).astype(int)
-    #
-    #         stacked_windows = []
-    #         for origin in frame_indices:
-    #             empty_window = np.zeros((self.num_neurons, self.window_frames + 1))
-    #             start_idx = np.floor(origin - (self.window_frames / 2)).astype(int)
-    #             end_idx = np.ceil(origin + (self.window_frames / 2)).astype(int)
-    #
-    #             if start_idx < 0:
-    #                 empty_window[:, 0:end_idx] = self.extracted_signals[:, 0:end_idx]
-    #             elif end_idx > self.num_frames:
-    #                 empty_window[:, start_idx:] = self.extracted_signals[:, start_idx:self.num_frames]
-    #             else:
-    #                 empty_window = self.extracted_signals[:, start_idx:end_idx]
-    #
-    #             event_window = empty_window
-    #             stacked_windows.append(event_window)
-    #
-    #         stacked_windows = np.array(stacked_windows)
-    #
-    #         return stacked_windows
-    #
-    #     else:
-    #         return np.array([])
 
     def extract_normalized_windows(self, target_event: str = "active_lever") -> np.ndarray:
         if self.eventlog_df.shape[1] != 4:
@@ -180,18 +167,18 @@ class NSyncDataset:
             sig_start = max(start, 0)
             sig_end = min(end, self.num_frames)
 
-            # Local window indices
-            win_start = sig_start - start  # ≥ 0
+            # Create window of correct size
+            win = np.zeros((self.num_neurons, W))
+
+            # Calculate window indices
+            win_start = sig_start - start
             win_end = win_start + (sig_end - sig_start)
 
-            # Allocate zero‐window and copy overlap
-            win = np.zeros((self.num_neurons, W))
+            # Copy valid data
             win[:, win_start:win_end] = self.extracted_signals[:, sig_start:sig_end]
-
             stacked.append(win)
 
         return np.array(stacked)
-
 
     def mean_neural_activity(self):
         return np.mean(self.neural_activity, axis=0)

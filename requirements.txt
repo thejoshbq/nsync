@@ -1,3 +1,5 @@
+tqdm
+scikit-learn
 exdir~=0.5.0.1
 ipython==9.4.0
 numpy==2.3.1

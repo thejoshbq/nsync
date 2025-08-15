@@ -1,9 +1,15 @@
+# System modules
 import warnings
-from typing import Any, Dict, List, Union
-from pathlib import Path
-import numpy as np
-from numpy.typing import NDArray
 import scipy.io as sio
+from pathlib import Path
+
+from numpy import ndarray, dtype, signedinteger
+# Typing modules
+from numpy.typing import NDArray
+from typing import Any, Dict, List, Union
+
+# Data processing modules
+import numpy as np
 
 class NSyncSample:
     def __init__(
@@ -12,6 +18,8 @@ class NSyncSample:
         extracted_signals: List[Union[str, Path]] | NDArray[np.uint64],
         mat_no_frames: Union[str, Path] | None = None,
         animal_name: str = "REX",
+        fov: str = None,
+        day: str = None,
         target_event_id: Union[int, List[int]] = 22,
         noise_event_id: Union[int, List[int]] = 222,
         frame_rate: int = 30,
@@ -24,6 +32,8 @@ class NSyncSample:
         self.extracted_signals = extracted_signals
         self.mat_no_frames = mat_no_frames if mat_no_frames else None
         self.animal_name = animal_name
+        self.fov = fov
+        self.day = day
 
         if isinstance(eventlog, list):
             self.eventlog = sorted([str(f) for f in eventlog])
@@ -80,6 +90,9 @@ class NSyncSample:
             frame_ts = self._get_frame_timestamps(animal=self.animal_name)
         if self.extracted_signals.shape[1] > frame_ts.shape[0]:
             self.extracted_signals = self.extracted_signals[:, :frame_ts.shape[0] - 1]
+
+    def __str__(self) -> str:
+        return f"NSyncSample(animal_name={self.animal_name}, fov={self.fov}, day={self.day}, num_neurons={self.num_neurons}, num_frames={self.num_frames})"
 
     @staticmethod
     def _compile_matlab_files(files: list) -> NDArray[np.float64]:
@@ -139,18 +152,33 @@ class NSyncSample:
 
     @staticmethod
     def _normalize_signals(extracted_signals: NDArray[np.uint64]) -> NDArray[np.float64]:
-        means = np.nanmean(extracted_signals, axis=1).reshape(-1, 1)  # shape: (num_neurons, 1)
-        normalized_signals = np.divide(
-            extracted_signals,
-            means,
-            out=np.zeros_like(extracted_signals, dtype=np.float64),
-            where=(means != 0) & (~np.isnan(means))
-        )
+        normalized_signals = extracted_signals.astype(np.float64)
+        valid_neurons = []
+        num_neurons = extracted_signals.shape[0]
 
-        for neuron in range(normalized_signals.shape[0]):
+        means = np.nanmean(extracted_signals, axis=1).reshape(-1, 1)  # shape: (num_neurons, 1)
+        for i in range(num_neurons):
+            if np.isnan(means[i]) or means[i] == 0:
+                normalized_signals[i, :] = np.nan  # mark as invalid
+            else:
+                valid_neurons.append(i)
+                normalized_signals[i, :] = np.divide(
+                    extracted_signals[i, :],
+                    means[i],
+                    out=np.zeros_like(extracted_signals[i, :], dtype=np.float64),
+                    where=(means[i] != 0) & (~np.isnan(means[i]))
+                ) # dF/F (divide by mean fluorescence)
+
+        if not valid_neurons:
+            return np.nan * np.ones_like(extracted_signals, dtype=np.float64)
+
+        for neuron in valid_neurons:
             mean = np.nanmean(normalized_signals[neuron])
             std = np.nanstd(normalized_signals[neuron])
-            normalized_signals[neuron] = (normalized_signals[neuron] - mean) / std
+            if np.isnan(mean) or np.isnan(std) or std == 0:
+                normalized_signals[neuron, :] = np.nan
+            else:
+                normalized_signals[neuron, :] = (normalized_signals[neuron] - mean) / std
 
         return normalized_signals
 
@@ -159,7 +187,6 @@ class NSyncSample:
         events = self.event_timestamps[np.isin(self.event_ids, target_ids)]
 
         if len(events) == 0:
-            print("No target events found")
             return np.array([])
 
         if self.isolated_events:
@@ -168,7 +195,6 @@ class NSyncSample:
             events = temp
 
         if len(events) < self.min_events:
-            print(f"Insufficient valid target events ({len(events)} < {self.min_events})")
             return np.array([])
 
         return events
@@ -178,7 +204,6 @@ class NSyncSample:
         frame_ts = self.event_timestamps[self.event_ids == 9]
         if frame_ts.size == 0:
             if animal in ['CTL1', 'ER-L1', 'ER-L2', 'IG-19', 'IG-28', 'PGa-T1', 'XYZ'] and mat_file is not None:
-                print(f"No frame timestamps found for {animal}. Attempting to use assumed timestamps.")
 
                 try:
                     assumed_data = sio.loadmat(mat_file)
@@ -199,19 +224,17 @@ class NSyncSample:
                     inter_frame_interval = 33  # Original uses 33 (not 33.333)
                     frame_drop_idx = np.where(diff_frames > 1.5 * inter_frame_interval)[0]
                     for idx in frame_drop_idx:
-                        numframesdropped = int(
+                        num_frames_dropped = int(
                             np.round((frame_ts[idx + 1] - frame_ts[idx]) / (inter_frame_interval + 0.0)) - 1)
-                        temp = [frame_ts[idx] + a * inter_frame_interval for a in range(1, numframesdropped + 1)]
+                        temp = [frame_ts[idx] + a * inter_frame_interval for a in range(1, num_frames_dropped + 1)]
                         dropped_frames.extend(temp)
                     corrected = np.sort(np.concatenate((frame_ts, np.array(dropped_frames))))
                     frame_ts = corrected
                 except FileNotFoundError:
-                    print(f"Assumed timestamps file not found. Generating uniform timestamps based on signal length.")
                     num_frames = self.get_num_frames() * self.frame_averaging
                     frame_ts = np.arange(num_frames) * (1000 / self.frame_rate)
 
             else:
-                print(f"No frame timestamps found for {animal}. Generating uniform timestamps.")
                 num_frames = self.get_num_frames() * self.frame_averaging
                 frame_ts = np.arange(num_frames) * (1000 / self.frame_rate)
 
@@ -227,6 +250,7 @@ class NSyncSample:
                     missed = frame_index_temp[i] + int(inter_frame_ms * (j + 1))
                     frames_missed.append(missed)
         corrected = np.sort(np.concatenate((frame_index_temp, frames_missed)))
+
         return corrected[::self.frame_averaging]  # downsample
 
     def _get_frame_indices(self, events: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -243,7 +267,8 @@ class NSyncSample:
                 frame_indices[i] = 0  # no frame timestamp found; use 0
         return frame_indices
 
-    def get_aligned_timeline(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def get_aligned_timeline(self) -> tuple[
+        ndarray[tuple[Any, ...], dtype[signedinteger[Any]]], ndarray[tuple[Any, ...], dtype[Any]]]:
         events = self._get_valid_events()
 
         if self.get_num_frames() == 0 or self.get_num_neurons() == 0:
@@ -315,14 +340,11 @@ class NSyncPopulation:
             self.mean_responses = np.array([])
             self.baseline_range = np.array([])
             self.pre_window_size = 0
-            print("No samples provided; population is empty.")
             return
 
-        # Share configs from the first sample (assume uniform across samples)
         self.baseline_range = self.samples[0].get_baseline_range()
         self.pre_window_size = self.samples[0].get_pre_window_size()
 
-        # Extract windows from each sample (filter invalid/empty)
         windows_list = [
             sample.get_event_windows()
             for sample in self.samples
@@ -335,28 +357,24 @@ class NSyncPopulation:
             self.stacked_windows = np.array([])
             self.per_neuron_means = np.array([])
             self.mean_responses = np.array([])
-            print("No valid windows found in samples.")
             return
 
         self.max_trials = max(w.shape[2] for w in windows_list)
         self.window_size = windows_list[0].shape[1]
-
-        # Make population stack
         self.stacked_windows = self._stack_windows(windows_list, self.max_trials)
 
-        # Calculate means per neuron in stack
         self.per_neuron_means = np.nanmean(self.stacked_windows, axis=2)
 
-        # Calculate baseline-subtracted means
         if subtract_baseline:
             self.per_neuron_means = self._subtract_baseline(self.per_neuron_means, self.baseline_range)
 
-        # Z-score data
         if self.z_scored:
             self.per_neuron_means = self._zscore_data(self.per_neuron_means, self.baseline_range)
 
-        # Calculate mean across windows
         self.mean_responses = np.nanmean(self.per_neuron_means, axis=1)
+
+    def __str__(self) -> str:
+        return f"NSyncPopulation(num_samples={len(self.samples)}, num_neurons={self.per_neuron_means.shape[0]}, window_size={self.window_size}, max_trials={self.max_trials})"
 
     @staticmethod
     def _stack_windows(windows: List[NDArray[np.float64]], max_trials: int) -> NDArray[np.float64]:
@@ -394,9 +412,7 @@ class NSyncPopulation:
         valid_mask = ~np.isnan(self.mean_responses)
         num_valid_neurons = 0
 
-        if not np.any(valid_mask):
-            print(f"No valid neurons found")
-        else:
+        if np.any(valid_mask):
             self.per_neuron_means = self.per_neuron_means[valid_mask]
             self.mean_responses = self.mean_responses[valid_mask]
             num_valid_neurons = self.per_neuron_means.shape[0]

@@ -210,7 +210,7 @@ if __name__ == "__main__":
                         animal_name=animal,
                         target_event_id=[22, 222],
                         isolated_events=True,
-                        min_events=2,
+                        min_events=3,
                         normalize_data=True,
                     )
 
@@ -228,7 +228,7 @@ if __name__ == "__main__":
                         cur.execute("INSERT INTO Events (type, timestamp, fov_id) VALUES (?, ?, ?)", (int(typ), float(ts), fov_id))
 
                     valid_events_ts = dataset._get_valid_events()
-                    target_eids = []
+                    target_event_ids = []
                     epsilon = 1e-9
                     for ts in valid_events_ts:
                         cur.execute("""
@@ -237,7 +237,7 @@ if __name__ == "__main__":
                         """, (fov_id, ts, epsilon))
                         row = cur.fetchone()
                         if row:
-                            target_eids.append(row[0])
+                            target_event_ids.append(row[0])
                         else:
                             print(f"No matching event for timestamp {ts} in FOV {fov}")
 
@@ -247,9 +247,9 @@ if __name__ == "__main__":
 
                     num_trials = windows.shape[2]
                     for i in range(num_trials):
-                        if i >= len(target_eids):
+                        if i >= len(target_event_ids):
                             break
-                        event_id = target_eids[i]
+                        event_id = target_event_ids[i]
                         for n in range(num_neurons):
                             window_arr = windows[n, :, i]
                             if np.all(np.isnan(window_arr)):

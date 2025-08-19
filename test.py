@@ -5,11 +5,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import io
 
-
 def blob_to_array(blob):
     bio = io.BytesIO(blob)
     return np.load(bio)
-
 
 def process_day_data(conn, did):
     frame_rate = 30
@@ -63,14 +61,13 @@ def process_day_data(conn, did):
 
     return sorted_temp, mean_trace, num_valid_neurons
 
-
 if __name__ == "__main__":
     db_path = "./output/PFC_Self-Admin.db"
     conn = sqlite3.connect(db_path)
 
     days_df = pd.read_sql_query("SELECT day_id, label FROM Days ORDER BY label", conn)
     days = days_df['label'].tolist()
-    dids = days_df['day_id'].tolist()
+    day_id = days_df['day_id'].tolist()
     num_days = len(days)
 
     if num_days == 0:
@@ -79,10 +76,11 @@ if __name__ == "__main__":
         exit()
 
     sns.set_style('white')
+
     fig, axes = plt.subplots(2, num_days, figsize=(15, 8), sharex='col', squeeze=False)
     fig.suptitle("Multi-Day Neural Activity from Database\n\n", fontsize=16)
 
-    for idx, (did, day) in enumerate(zip(dids, days)):
+    for idx, (did, day) in enumerate(zip(day_id, days)):
         sorted_temp, mean_trace, num_valid_neurons = process_day_data(conn, did)
 
         if num_valid_neurons == 0:

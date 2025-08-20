@@ -206,10 +206,10 @@ if __name__ == "__main__":
                     dataset = NSyncSample(
                         eventlog=behavior_event_log_files,
                         extracted_signals=extracted_signals_files,
-                        mat_no_frames=os.path.join(root, 'empty.mat'),
+                        frame_correction=os.path.join(root, 'empty.mat'),
                         animal_name=animal,
-                        target_event_id=[22, 222],
-                        isolated_events=True,
+                        target_id=[22, 222],
+                        isolate_events=True,
                         min_events=3,
                         normalize_data=True,
                     )
@@ -227,7 +227,7 @@ if __name__ == "__main__":
                     for typ, ts in eventlog:
                         cur.execute("INSERT INTO Events (type, timestamp, fov_id) VALUES (?, ?, ?)", (int(typ), float(ts), fov_id))
 
-                    valid_events_ts = dataset._get_valid_events()
+                    valid_events_ts = dataset.__get_valid_events()
                     target_event_ids = []
                     epsilon = 1e-9
                     for ts in valid_events_ts:
@@ -241,7 +241,7 @@ if __name__ == "__main__":
                         else:
                             print(f"No matching event for timestamp {ts} in FOV {fov}")
 
-                    windows = dataset._align_event_windows()
+                    windows = dataset.__align_event_windows()
                     if windows.ndim != 3 or windows.size == 0:
                         continue
 

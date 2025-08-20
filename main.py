@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from nsync2p.nsync2p import NSyncSample
+from nsync2p.sample import NSyncSample
 
 def array_to_blob(arr):
     bio = io.BytesIO()
@@ -241,7 +241,7 @@ if __name__ == "__main__":
                         else:
                             print(f"No matching event for timestamp {ts} in FOV {fov}")
 
-                    windows = dataset.get_event_windows()
+                    windows = dataset._align_event_windows()
                     if windows.ndim != 3 or windows.size == 0:
                         continue
 

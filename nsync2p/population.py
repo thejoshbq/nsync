@@ -15,11 +15,13 @@ class NSyncPopulation:
     def __init__(
         self,
         samples: List[NSyncSample],
+        name: str = "POP",
         subtract_baseline: bool = False,
         z_score: bool = False,
         compute_significance: bool = False,
         bh_correction: bool = False,
     ):
+        self._name = name
         self._samples = samples
         self._subtract_baseline = subtract_baseline
         self._z_score = z_score
@@ -35,7 +37,7 @@ class NSyncPopulation:
         self._used_samples = []
         self._max_trials = 0
         for sample in self._samples:
-            if sample.get_num_events() > sample._min_events and sample.get_num_frames() > 0 and sample.get_num_neurons() > 0:
+            if sample.get_num_events() > sample.get_min_events() and sample.get_num_frames() > 0 and sample.get_num_neurons() > 0:
                 windows_list.append(sample.get_event_windows())
                 num_trials = sample.get_num_events()
                 if num_trials > self._max_trials:
@@ -57,11 +59,11 @@ class NSyncPopulation:
         self._raw_mean_responses = np.nanmean(self._raw_per_neuron_means, axis=1)
 
         # apply the preprocessing pipeline based on init params
-        self.__pipeline()
+        self.__pipeline__()
 
 
     # private
-    def __pipeline(self) -> None:
+    def __pipeline__(self) -> None:
         """Apply the preprocessing pipeline based on class parameters, updating processed attributes while preserving raw data."""
         # get appropriate windows and compute per_neuron_means (low memory: avoid full stack unless needed for significance)
         windows_list = [sample.get_event_windows() for sample in self._used_samples]
@@ -86,10 +88,9 @@ class NSyncPopulation:
             sig_mask = self.__compute_significance__(stacked=stacked)
             self.significance_results = self.per_neuron_means[sig_mask]
 
-    @staticmethod
-    def __stack_windows__(windows: List[NDArray[np.float64]], max_trials: int) -> NDArray[np.float64]:
+    def __stack_windows__(self, windows: List[NDArray[np.float64]], max_trials: int) -> NDArray[np.float64]:
         stacked_windows = []
-        for _, window_set in tqdm(enumerate(windows), desc="Stacking windows", total=len(windows)):
+        for _, window_set in tqdm(enumerate(windows), desc=f"{self._name} | Stacking windows, n={len(windows)}", total=len(windows)):
             if window_set.shape[2] < max_trials:
                 padded = np.pad(
                     window_set,
@@ -145,7 +146,7 @@ class NSyncPopulation:
         auc_vals = np.full(num_neurons, np.nan)
         p_vals = np.full(num_neurons, np.nan)
 
-        for n in tqdm(range(num_neurons), desc="Computing significance", total=num_neurons):
+        for n in tqdm(range(num_neurons), desc=f"{self._name} | Computing significance, n={num_neurons}", total=num_neurons):
             x, y = trial_events[n], trial_baselines[n]
             valid_mask = ~(np.isnan(x) | np.isnan(y))
             if np.sum(valid_mask) < 2: continue  # Skip low data
@@ -218,10 +219,19 @@ class NSyncPopulation:
         return self._baseline_range
 
     def __str__(self):
-        animals = [a.get_animal_name() for a in self._samples]
-        neurons = [a.get_num_neurons() for a in self._samples]
-        events = [a.get_num_events() for a in self._samples]
-        included = [True if a in self._used_samples else False for a in self._samples]
-        df = pd.DataFrame.from_dict({"Animals": animals, "Neurons": neurons, "Events": events, "Included": included})
+        animals = [a.get_animal_name() for a in self._used_samples]
+        neurons = [a.get_num_neurons() for a in self._used_samples]
+        events = [a.get_num_events() for a in self._used_samples]
+        df = pd.DataFrame.from_dict({"Animals": animals, "Neurons": neurons, "Trials": events})
 
-        return str(df)
+        summary = f"""
+\n====================\n
+Population: {self._name}
+Animals: {len(self._used_samples)} / {len(self._samples)}
+Neurons: {sum(neurons)}
+Trials: {sum(events)}
+Criteria: t >= {self._used_samples[0].get_min_events()}\n
+{str(df)}
+\n====================\n"""
+
+        return summary

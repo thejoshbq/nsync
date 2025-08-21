@@ -72,7 +72,7 @@ class NSyncSample:
         }
 
         if self._normalize:
-            self._extracted_signals = self.__normalize_signals__(self._extracted_signals)
+            self._extracted_signals = self.__normalize_signals__()
 
         frame_ts = self.__get_frame_timestamps__(mat_file=self._frame_correction, animal=self._animal_name)
         if self._extracted_signals.shape[1] > frame_ts.shape[0]:
@@ -81,12 +81,11 @@ class NSyncSample:
         self._event_windows = self.__align_event_windows__()
 
     # private
-    @staticmethod
-    def __compile_matlab_files__(files: list) -> NDArray[np.float64]:
+    def __compile_matlab_files__(self, files: list) -> NDArray[np.float64]:
         stack = []
         last_timestamp = 0
         if isinstance(files, list) and len(files) > 0:
-            for _, file in tqdm(enumerate(files), desc="Compiling MATLAB files", total=len(files)):
+            for _, file in tqdm(enumerate(files), desc=f"{self._animal_name} | Compiling MATLAB files, n={len(files)}", total=len(files)):
                 try:
                     data = sio.loadmat(file)
                     eventlog = np.squeeze(data["eventlog"])
@@ -100,11 +99,10 @@ class NSyncSample:
 
         return stack.astype(np.float64)
 
-    @staticmethod
-    def __compile_npy_files__(files: list) -> NDArray[np.float64]:
+    def __compile_npy_files__(self, files: list) -> NDArray[np.float64]:
         stack = []
         if isinstance(files, list) and len(files) > 0:
-            for _, file in tqdm(enumerate(files), desc="Compiling .npy files", total=len(files)):
+            for _, file in tqdm(enumerate(files), desc=f"{self._animal_name} | Compiling .npy files, n={len(files)}", total=len(files)):
                 with warnings.catch_warnings(record=True) as captured_warnings:
                     warnings.simplefilter("always")
                     try:
@@ -120,17 +118,16 @@ class NSyncSample:
             stack = np.hstack(stack) if len(stack) > 0 else np.array(stack)
         return stack.astype(np.float64)
 
-    @staticmethod
-    def __normalize_signals__(extracted_signals: NDArray[np.uint64]) -> NDArray[np.float64]:
-        means = np.nanmean(extracted_signals, axis=1).reshape(-1, 1)  # shape: (num_neurons, 1)
+    def __normalize_signals__(self) -> NDArray[np.float64]:
+        means = np.nanmean(self._extracted_signals, axis=1).reshape(-1, 1)  # shape: (num_neurons, 1)
         normalized_signals = np.divide(
-            extracted_signals,
+            self._extracted_signals,
             means,
-            out=np.zeros_like(extracted_signals, dtype=np.float64),
+            out=np.zeros_like(self._extracted_signals, dtype=np.float64),
             where=(means != 0) & (~np.isnan(means))
         )
 
-        for neuron in tqdm(range(normalized_signals.shape[0]), desc="Normalizing signals", total=normalized_signals.shape[0]):
+        for neuron in tqdm(range(normalized_signals.shape[0]), desc=f"{self._animal_name} | Normalizing signals, n={normalized_signals.shape[0]}", total=normalized_signals.shape[0]):
             mean = np.nanmean(normalized_signals[neuron])
             std = np.nanstd(normalized_signals[neuron])
             normalized_signals[neuron] = (normalized_signals[neuron] - mean) / std
@@ -142,7 +139,6 @@ class NSyncSample:
         events = self.event_timestamps[np.isin(self.event_ids, target_ids)]
 
         if len(events) == 0:
-            print("No target events found")
             return np.array([])
 
         if self._isolate_events:
@@ -151,7 +147,6 @@ class NSyncSample:
             events = temp
 
         if len(events) < self._min_events:
-            print(f"Insufficient valid target events ({len(events)} < {self._min_events})")
             return np.array([])
 
         return events
@@ -172,7 +167,7 @@ class NSyncSample:
         aligned_windows = np.full((num_trials, self._window_size, self.get_num_neurons()), np.nan, dtype=np.float64)
         signals_t = self._extracted_signals.T  # frames × neurons
         valid_trials = []
-        for i, event_idx in tqdm(enumerate(frame_indices), desc="Aligning event windows", total=num_trials):
+        for i, event_idx in tqdm(enumerate(frame_indices), desc=f"{self._animal_name} | Aligning event windows, n={num_trials}", total=num_trials):
             event_idx = int(event_idx)
             if event_idx < self._pre_window_size or event_idx >= (self.get_num_frames() - self._post_window_size):
                 continue
@@ -211,7 +206,7 @@ class NSyncSample:
                     diff_frames = np.diff(frame_ts)
                     inter_frame_interval = 33
                     frame_drop_idx = np.where(diff_frames > 1.5 * inter_frame_interval)[0]
-                    for idx in frame_drop_idx:
+                    for _, idx in tqdm(enumerate(frame_drop_idx), desc=f"{animal} | Fixing frame timestamps, n={len(frame_drop_idx)}", total=len(frame_drop_idx)):
                         numframesdropped = int(
                             np.round((frame_ts[idx + 1] - frame_ts[idx]) / (inter_frame_interval + 0.0)) - 1)
                         temp = [frame_ts[idx] + a * inter_frame_interval for a in range(1, numframesdropped + 1)]
@@ -231,7 +226,7 @@ class NSyncSample:
         frame_index_temp = np.concatenate((first_frame, frame_ts, last_frame))
         frames_missed = []
         inter_frame_ms = 1000 / self._frame_rate  # ~33.333
-        for i in range(len(frame_index_temp) - 1):
+        for i in tqdm(range(len(frame_index_temp) - 1), desc=f"{animal} | Correcting frame timestamps, n={len(frame_index_temp)}", total=len(frame_index_temp) - 1):
             num_missed = int(np.round((frame_index_temp[i + 1] - frame_index_temp[i]) / inter_frame_ms) - 1)
             if num_missed > 0:
                 for j in range(num_missed):
@@ -244,7 +239,7 @@ class NSyncSample:
     def __get_frame_indices__(self, events: NDArray[np.float64]) -> NDArray[np.float64]:
         frame_ts = self.__get_frame_timestamps__(mat_file=self._frame_correction, animal=self._animal_name)
         frame_indices = np.zeros(len(events), dtype=np.uint64)
-        for i, e in enumerate(events):
+        for i, e in tqdm(enumerate(events), desc=f"{self._animal_name} | Finding frame indices, n={len(events)}", total=len(events)):
             if np.isnan(e):
                 frame_indices[i] = 0  # set invalid events to 0; will be filtered later
                 continue
@@ -262,6 +257,9 @@ class NSyncSample:
 
     def get_num_events(self) -> int:
         return len(self.__get_valid_events__())
+
+    def get_min_events(self) -> int:
+        return self._min_events
 
     def get_sampling_rate(self) -> float:
         return self._sampling_rate
@@ -291,4 +289,4 @@ class NSyncSample:
         return self._event_windows
 
     def __str__(self):
-        return f"Animal: {self._animal_name}, n={self.num_neurons}, s={len(self.__get_valid_events__())}"
+        return f"Animal: {self._animal_name}, n={self.num_neurons}, t={self.get_num_events()}"

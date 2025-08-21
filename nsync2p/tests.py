@@ -6,7 +6,7 @@ from nsync2p.sample import NSyncSample
 from nsync2p.population import NSyncPopulation
 from tqdm import tqdm
 
-def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False):
+def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False, remove_unused_files: bool = False):
     if not os.path.isdir(root):
         print(f"Directory {root} does not exist.")
         return
@@ -28,9 +28,10 @@ def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False):
             for fov in fovs:
                 fov_path = os.path.join(animal_path, fov)
 
-                # for f in os.listdir(fov_path):
-                #     if "extractedsignals_raw" not in f and not f.endswith(".npz") and not f.endswith(".mat"):
-                #         os.remove(os.path.join(fov_path, f))
+                if remove_unused_files:
+                    for f in os.listdir(fov_path):
+                        if "extractedsignals_raw" not in f and not f.endswith(".npz") and not f.endswith(".mat"):
+                            os.remove(os.path.join(fov_path, f))
 
                 extracted_signals_files = sorted([
                     os.path.join(fov_path, f) for f in os.listdir(fov_path)
@@ -49,7 +50,7 @@ def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False):
                         animal_name=animal,
                         target_id=[22, 222], # active and active-timeout lever presses
                         isolate_events=True,
-                        min_events=3,
+                        min_events=2,
                         normalize=True,
                     )
                     dataset_windows = dataset.get_event_windows()
@@ -62,6 +63,7 @@ def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False):
 
         day_dataset = NSyncPopulation(
             day_samples,
+            name=day[2:],
             subtract_baseline=True,
             z_score=True,
             compute_significance=True,
@@ -119,4 +121,4 @@ def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False):
 
 if __name__ == "__main__":
     sns.set_style('white')
-    compile_data("../data", False, True)
+    compile_data("../data", True, False, False)

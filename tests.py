@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from nsync2p.sample import NSyncSample
 from nsync2p.population import NSyncPopulation
-from tqdm import tqdm
 
 def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False, remove_unused_files: bool = False):
     if not os.path.isdir(root):
@@ -50,13 +49,15 @@ def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False, 
                         animal_name=animal,
                         target_id=[22, 222], # active and active-timeout lever presses
                         isolate_events=True,
-                        min_events=2,
+                        min_events=3,
                         normalize=True,
                     )
                     dataset_windows = dataset.get_event_windows()
                     if dataset_windows.ndim == 3 and dataset_windows.size > 0:
                         day_num_neurons += dataset.get_num_neurons()
                         day_samples.append(dataset)
+                    else:
+                        print(f"Skipping {fov_path} due to invalid data")
                 except Exception as e:
                     print(f"Error processing {fov_path}: {e}")
                     continue
@@ -65,8 +66,8 @@ def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False, 
             day_samples,
             name=day[2:],
             subtract_baseline=True,
-            z_score=True,
-            compute_significance=True,
+            z_score_baseline=True,
+            compute_significance=False,
             bh_correction=False,
         )
         per_neuron_means, mean_responses, num_valid_neurons = day_dataset.get_valid_trials()
@@ -82,8 +83,9 @@ def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False, 
 
     if plot:
         num_days = len(days)
+        min_num_events = day_datasets[0].get_samples()[0].get_min_events()
         fig, axes = plt.subplots(2, num_days, figsize=(15, 8), sharex='col', squeeze=False)
-        fig.suptitle("Multi-Day Neural Activity", color='k', fontsize=16)
+        fig.suptitle(f"Normalized Extracted Signals at Event of Interest\nEOI: Active Lever Press, n>={min_num_events}", color='k', fontsize=16)
 
         for idx, (day_dataset, day, num_valid_neurons) in enumerate(zip(day_datasets, days, day_num_neurons_list)):
             if num_valid_neurons == 0:
@@ -98,17 +100,19 @@ def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False, 
                 vmin=-4, vmax=4,
                 aspect='auto'
             )
-            ax1.set_title(f'{day} (n={num_valid_neurons})', color='k')
+            ax1.set_title(f'{day[2:]} (n={num_valid_neurons})', color='k')
             ax1.axvline(x=day_dataset.get_pre_window_size(), color='k', linestyle='--', alpha=0.7, label='Event')
             ax1.tick_params(colors='k')
 
             ax2 = axes[1, idx]
             ax2.set_ylim(-.5, 2.5)
-            ax2.plot(np.nanmean(per_neuron_means, axis=0), color='r', label='Mean Activity')
+            ax2.plot(np.nanmean(per_neuron_means, axis=0), label='Mean Activity')
+            ax2.plot(np.nanmedian(per_neuron_means, axis=0), label='Median Activity')
             ax2.axvline(x=day_dataset.get_pre_window_size(), color='k', linestyle='--', alpha=0.7, label='Event')
             ax2.set_xlabel('Frames Relative to Event', color='k')
             ax2.grid(True, color='gray', alpha=0.3)
             ax2.tick_params(colors='k')
+            ax2.set_xticks([0, day_dataset.get_pre_window_size(), len(per_neuron_means[0]) - 1])
 
             if idx == 0:
                 ax1.set_ylabel('Neurons', color='k')
@@ -121,4 +125,4 @@ def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False, 
 
 if __name__ == "__main__":
     sns.set_style('white')
-    compile_data("../data", True, False, False)
+    compile_data("data", True, True, False)

@@ -17,14 +17,14 @@ class NSyncPopulation:
         samples: List[NSyncSample],
         name: str = "POP",
         subtract_baseline: bool = False,
-        z_score: bool = False,
+        z_score_baseline: bool = False,
         compute_significance: bool = False,
         bh_correction: bool = False,
     ):
         self._name = name
         self._samples = samples
         self._subtract_baseline = subtract_baseline
-        self._z_score = z_score
+        self._z_score_baseline = z_score_baseline
         self._compute_significance = compute_significance
         self._bh_correction = bh_correction
 
@@ -64,22 +64,17 @@ class NSyncPopulation:
 
     # private
     def __pipeline__(self) -> None:
-        """Apply the preprocessing pipeline based on class parameters, updating processed attributes while preserving raw data."""
-        # get appropriate windows and compute per_neuron_means (low memory: avoid full stack unless needed for significance)
         windows_list = [sample.get_event_windows() for sample in self._used_samples]
 
         per_neuron_means_list = [np.nanmean(w, axis=2) for w in windows_list]
         self.per_neuron_means = np.concatenate(per_neuron_means_list, axis=0) if per_neuron_means_list else np.array([])
-
-        stacked = None
-        if self._compute_significance:
-            stacked = self.__stack_windows__(windows_list, self._max_trials)
+        stacked = self.__stack_windows__(windows_list, self._max_trials)
 
         if self._subtract_baseline:
             self.per_neuron_means = self.__subtract_baseline__(self.per_neuron_means, self._baseline_range)
 
-        if self._z_score:
-            self.per_neuron_means = self.__zscore_data__(self.per_neuron_means, self._baseline_range)
+        if self._z_score_baseline:
+            self.per_neuron_means = self.__z_score_baseline__(self.per_neuron_means, self._baseline_range)
 
         self.mean_responses = np.nanmean(self.per_neuron_means, axis=1)
 
@@ -90,7 +85,7 @@ class NSyncPopulation:
 
     def __stack_windows__(self, windows: List[NDArray[np.float64]], max_trials: int) -> NDArray[np.float64]:
         stacked_windows = []
-        for _, window_set in tqdm(enumerate(windows), desc=f"{self._name} | Stacking windows, n={len(windows)}", total=len(windows)):
+        for _, window_set in enumerate(tqdm(windows, desc=f"{self._name} | Stacking windows, n={len(windows)}", total=len(windows))):
             if window_set.shape[2] < max_trials:
                 padded = np.pad(
                     window_set,
@@ -109,7 +104,7 @@ class NSyncPopulation:
         return per_neuron_means - baseline
 
     @staticmethod
-    def __zscore_data__(per_neuron_means: NDArray[np.float64], baseline_range: np.ndarray) -> NDArray[np.float64]:
+    def __z_score_baseline__(per_neuron_means: NDArray[np.float64], baseline_range: np.ndarray) -> NDArray[np.float64]:
         baseline_stds = np.nanstd(per_neuron_means[:, baseline_range], axis=1, keepdims=True)
         return np.divide(
             per_neuron_means,
@@ -128,44 +123,51 @@ class NSyncPopulation:
 
         print("No valid windows found in samples.")
 
-    def __compute_significance__(self, stacked: NDArray[np.float64], auc_window: tuple = (-5, 5), alpha: float = 0.05) -> NDArray[bool]:
-        auc_start = self._pre_window_size + int(auc_window[0] * self._sampling_rate)
-        auc_end = self._pre_window_size + int(auc_window[1] * self._sampling_rate)
+    def __compute_significance__(self, stacked: NDArray[np.float64], auc_window: tuple = (-5, 5),
+                                 alpha: float = 0.05) -> NDArray[bool]:
+        auc_start = self._pre_window_size + int(auc_window[0] * self._sampling_rate)  # -5s relative to event
+        auc_end = self._pre_window_size + int(auc_window[1] * self._sampling_rate)  # +5s relative to event
 
-        if stacked[:, self._baseline_range, :].size == 0:
-            baselines = np.nanmean(stacked[:, self._baseline_range, :], axis=1)  # neurons x trials
-            stacked_sub = stacked - baselines[:, np.newaxis, :]  # Subtract per trial
-
-            trial_baselines = np.nanmean(stacked_sub[:, self._baseline_range, :], axis=1)  # neurons x trials
-            trial_events = np.nanmean(stacked_sub[:, auc_start:auc_end, :], axis=1)  # neurons x trials
-        else:
-            trial_baselines = np.full((stacked.shape[0], self._max_trials), np.nan)
-            trial_events = np.full((stacked.shape[0], self._max_trials), np.nan)
+        trial_baselines = np.nanmean(stacked[:, self._baseline_range, :], axis=1)  # neurons x trials
+        trial_events = np.nanmean(stacked[:, auc_start:auc_end, :], axis=1)  # neurons x trials
 
         num_neurons = stacked.shape[0]
         auc_vals = np.full(num_neurons, np.nan)
         p_vals = np.full(num_neurons, np.nan)
 
-        for n in tqdm(range(num_neurons), desc=f"{self._name} | Computing significance, n={num_neurons}", total=num_neurons):
-            x, y = trial_events[n], trial_baselines[n]
+        for n in tqdm(range(num_neurons), desc=f"{self._name} | Computing significance, n={num_neurons}",
+                      total=num_neurons):
+            x = trial_events[n]  # response data for neuron n
+            y = trial_baselines[n]  # baseline data for neuron n
+
+            # remove NaNs
             valid_mask = ~(np.isnan(x) | np.isnan(y))
-            if np.sum(valid_mask) < 2: continue  # Skip low data
-            x, y = x[valid_mask], y[valid_mask]
+            if np.sum(valid_mask) < 2:  # need at least 2 valid points for Mann-Whitney U
+                continue
+            x_clean, y_clean = x[valid_mask], y[valid_mask]
 
             # Mann-Whitney U p-value
-            _, p = stats.mannwhitneyu(x, y, alternative='two-sided')
-            p_vals[n] = p
+            try:
+                _, p = stats.mannwhitneyu(x_clean, y_clean, alternative='two-sided')
+                p_vals[n] = p
+            except ValueError:
+                p_vals[n] = np.nan
+                continue
 
-            # AUROC (shifted to -1 to 1)
-            labels = np.concatenate([np.ones_like(x), np.zeros_like(y)])
-            data = np.concatenate([x, y])
-            auc = 2 * (roc_auc_score(labels, data) - 0.5)
-            auc_vals[n] = auc
+            # AUROC (shifted to -1 to 1, as in old codebase)
+            try:
+                labels = np.concatenate([np.ones_like(x_clean), np.zeros_like(y_clean)])
+                data = np.concatenate([x_clean, y_clean])
+                auc = roc_auc_score(labels, data)
+                auc_vals[n] = 2 * (auc - 0.5)  # Shift to [-1, 1]
+            except ValueError:
+                auc_vals[n] = np.nan
 
         if self._bh_correction:
             p_vals = self.__benjamini_hochberg__(p_vals, alpha)
 
         sig_mask = p_vals <= alpha
+        sig_mask[~np.isfinite(p_vals)] = False  # ensure NaN p-values are not significant
 
         return sig_mask
 
@@ -186,6 +188,9 @@ class NSyncPopulation:
         return corrected
 
     # public
+    def get_samples(self) -> List[NSyncSample]:
+        return self._samples
+
     def get_valid_trials(self) -> tuple[NDArray[np.float64], NDArray[np.float64], int]:
         valid_mask = ~np.isnan(self.mean_responses)
         num_valid_neurons = 0

@@ -154,7 +154,7 @@ class NSyncPopulation:
                 p_vals[n] = np.nan
                 continue
 
-            # AUROC (shifted to -1 to 1, as in old codebase)
+            # AUROC (shifted to -1 to 1)
             try:
                 labels = np.concatenate([np.ones_like(x_clean), np.zeros_like(y_clean)])
                 data = np.concatenate([x_clean, y_clean])

@@ -85,7 +85,7 @@ def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False, 
         num_days = len(days)
         min_num_events = day_datasets[0].get_samples()[0].get_min_events()
         fig, axes = plt.subplots(2, num_days, figsize=(15, 8), sharex='col', squeeze=False)
-        fig.suptitle(f"Normalized Extracted Signals at Event of Interest\nEOI: Active Lever Press, n>={min_num_events}", color='k', fontsize=16)
+        fig.suptitle(f"Normalized Extracted Signals at Event of Interest\n\nEOI: Active Lever Press, n>={min_num_events}\n\n", color='k', fontsize=16)
 
         for idx, (day_dataset, day, num_valid_neurons) in enumerate(zip(day_datasets, days, day_num_neurons_list)):
             if num_valid_neurons == 0:
@@ -106,8 +106,8 @@ def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False, 
 
             ax2 = axes[1, idx]
             ax2.set_ylim(-.5, 2.5)
-            ax2.plot(np.nanmean(per_neuron_means, axis=0), label='Mean Activity')
-            ax2.plot(np.nanmedian(per_neuron_means, axis=0), label='Median Activity')
+            ax2.plot(np.nanmean(per_neuron_means, axis=0), label='Mean')
+            ax2.plot(np.nanmedian(per_neuron_means, axis=0), label='Median')
             ax2.axvline(x=day_dataset.get_pre_window_size(), color='k', linestyle='--', alpha=0.7, label='Event')
             ax2.set_xlabel('Frames Relative to Event', color='k')
             ax2.grid(True, color='gray', alpha=0.3)
@@ -118,6 +118,7 @@ def compile_data(root: str = "./", dataframe: bool = False, plot: bool = False, 
                 ax1.set_ylabel('Neurons', color='k')
                 ax2.set_ylabel('Mean Response', color='k')
 
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0., frameon=False, fontsize=8, ncol=1, title='Activity')
         plt.colorbar(im, ax=axes[0, -1], label='Z-scored ΔF/F')
         plt.tight_layout()
         plt.show()

@@ -2,6 +2,6 @@
 .idea/
 .git/
 data/
-compiled_data/
-compiled_data/2
+.idea/
+__pycache__/
 

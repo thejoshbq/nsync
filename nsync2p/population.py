@@ -1,3 +1,5 @@
+# population.py
+
 from scipy import stats
 from sklearn.metrics import roc_auc_score
 import pandas as pd
@@ -222,6 +224,9 @@ class NSyncPopulation:
 
     def get_baseline_range(self) -> np.ndarray:
         return self._baseline_range
+
+    def get_used_samples(self) -> List[NSyncSample]:
+        return self._used_samples
 
     def __str__(self):
         animals = [a.get_animal_name() for a in self._used_samples]

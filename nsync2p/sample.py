@@ -1,3 +1,5 @@
+# sample.py
+
 from pathlib import Path
 import scipy.io as sio
 import warnings
@@ -14,6 +16,7 @@ class NSyncSample:
         self,
         eventlog: List[Union[str, Path]] | Dict[str, Any],
         extracted_signals: List[Union[str, Path]] | NDArray[np.uint64],
+        cluster_ids: List[Union[str, Path]] | NDArray[np.uint64] | None = None,
         frame_correction: Union[str, Path] | None = None,
         animal_name: str = "REX",
         target_id: Union[int, List[int]] = 22,
@@ -24,8 +27,6 @@ class NSyncSample:
         min_events: int = 3,
         normalize: bool = False,
     ):
-        self._eventlog = eventlog
-        self._extracted_signals = extracted_signals
         self._frame_correction = frame_correction
         self._animal_name = animal_name
         self._normalize = normalize
@@ -43,6 +44,12 @@ class NSyncSample:
             self._extracted_signals = self.__compile_npy_files__(extracted_signals)
         else:
             self._extracted_signals = extracted_signals.astype(np.float64)
+
+        if isinstance(cluster_ids, list):
+            if len(cluster_ids) != len(self._extracted_signals):
+                raise ValueError("Cluster IDs and extracted signals must be the same length")
+            else:
+                self._cluster_ids = np.array(cluster_ids)
 
         self.num_neurons = self._extracted_signals.shape[0]
         self.num_frames = self._extracted_signals.shape[1]
@@ -303,8 +310,14 @@ class NSyncSample:
     def get_extracted_signals(self) -> NDArray[np.float64]:
         return self._extracted_signals
 
+    def get_cluster_ids(self):
+        return self._cluster_ids
+
     def get_event_windows(self) -> NDArray[np.float64]:
         return self._event_windows
 
     def __str__(self):
         return f"Animal: {self._animal_name}, n={self.num_neurons}, t={self.get_num_events()}"
+
+    def set_cluster_ids(self, cluster_ids: NDArray[np.float64]):
+        self._cluster_ids = cluster_ids
